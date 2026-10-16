@@ -1,8 +1,10 @@
 // =============================================================================
-// Tapo — SignalRGB Plugin  v3.0.0
+// Tapo — SignalRGB Plugin  v3.1.0
 // Supports all tapo-rest devices (L5xx, L6xx, L9xx, P1xx)
 // Requires: tapo-rest running locally (https://github.com/ClementNerma/tapo-rest)
 // Transport: XMLHttpRequest
+// Auth: tapo-rest API key (Authorization: Bearer <key>) — no /login endpoint.
+//       Enter the API key in the "Password" field of the service panel.
 // =============================================================================
 
 // Controllable parameter globals — declared as var so the SignalRGB runtime
@@ -15,7 +17,7 @@ var brightnessScale = "100";
 
 const HOST     = "127.0.0.1";
 const PORT     = 8000;
-const PASSWORD = "";
+const PASSWORD = "";   // this is now the tapo-rest API key (set it in the panel)
 
 // Minimum canvas frames between sends (~5fps at SignalRGB's default 30fps)
 let FRAME_SKIP  = 6;
@@ -23,7 +25,7 @@ let FRAME_SKIP  = 6;
 // Minimum HSV delta (0–100) before sending a new command
 let MIN_DELTA   = 3;
 
-let sessionToken   = null;
+let apiKey         = null;
 let frameCounter   = 0;
 let requestPending = false;
 let lastHue        = -1;
@@ -34,7 +36,7 @@ let lastBri        = -1;
 
 export function Name()      { return "Tapo"; }
 export function Publisher() { return "SignalRGB Community"; }
-export function Version()   { return "3.0.0"; }
+export function Version()   { return "3.1.0"; }
 export function Type()      { return "network"; }
 
 export function SubdeviceController() { return true; }
@@ -64,11 +66,10 @@ function deviceCaps(type) {
 
 export function DiscoveryService() {
     const disc = this;
-    let discoveryToken = null;
     this.IconUrl = "https://i.ibb.co/0ytq0n9Q/tapo.jpg";
     let host     = HOST;
     let port     = PORT;
-    let password = PASSWORD;
+    let password = PASSWORD;   // tapo-rest API key
 
     // Called once when SignalRGB loads the plugin.
     this.Initialize = function() {
@@ -91,7 +92,7 @@ export function DiscoveryService() {
         disc.minDelta  = MIN_DELTA;
 
         service.log("[Tapo] Connecting to tapo-rest @ " + host + ":" + port);
-        serviceLogin();
+        fetchDevices();
     };
 
     // Called periodically by SignalRGB — announce any pending controllers.
@@ -113,6 +114,7 @@ export function DiscoveryService() {
     };
 
     // Called from QML to update and persist the tapo-rest connection config.
+    // The "password" argument is the tapo-rest API key.
     this.setServerConfig = function(newHost, newPort, newPassword) {
         host     = newHost           || host;
         port     = parseInt(newPort) || port;
@@ -130,8 +132,7 @@ export function DiscoveryService() {
         for (const cont of service.controllers) {
             service.removeController(cont);
         }
-        discoveryToken = null;
-        serviceLogin();
+        fetchDevices();
     };
 
     // Called from QML to update and persist the render tuning config.
@@ -154,30 +155,16 @@ export function DiscoveryService() {
         }
     };
 
-    function serviceLogin() {
-        service.log("[Tapo] POST /login ...");
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", `http://${host}:${port}/login`, true);
-        xhr.setRequestHeader("Content-Type", "application/json");
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState !== 4) return;
-            service.log("[Tapo] /login → HTTP " + xhr.status);
-            if (xhr.status === 200) {
-                discoveryToken = xhr.responseText.trim().replace(/^"|"$/g, "");
-                service.log("[Tapo] Discovery token acquired");
-                fetchDevices();
-            } else {
-                service.log("[Tapo] Discovery login failed — body: " + xhr.responseText);
-            }
-        };
-        xhr.send(JSON.stringify({ password: password }));
-    }
-
     function fetchDevices() {
+        if (!password) {
+            service.log("[Tapo] No API key set — enter your tapo-rest API key in the Password field and hit Apply.");
+            return;
+        }
+
         service.log("[Tapo] GET /devices ...");
         const xhr = new XMLHttpRequest();
         xhr.open("GET", `http://${host}:${port}/devices`, true);
-        xhr.setRequestHeader("Authorization", "Bearer " + discoveryToken);
+        xhr.setRequestHeader("Authorization", "Bearer " + password);
         xhr.onreadystatechange = function() {
             if (xhr.readyState !== 4) return;
             service.log("[Tapo] /devices → HTTP " + xhr.status + " — " + xhr.responseText);
@@ -198,6 +185,8 @@ export function DiscoveryService() {
                         minDelta:   MIN_DELTA,
                     });
                 }
+            } else if (xhr.status === 401 || xhr.status === 403) {
+                service.log("[Tapo] API key rejected by tapo-rest (HTTP " + xhr.status + ") — check the key in the Password field.");
             } else {
                 service.log("[Tapo] Failed to fetch devices — body: " + xhr.responseText);
             }
@@ -213,7 +202,7 @@ class TapoBridge {
         this.name       = value.name;
         this.ip         = value.ip;
         this.port       = value.port;
-        this.password   = value.password;
+        this.password   = value.password;   // tapo-rest API key
         this.deviceName = value.deviceName;
         this.deviceType = value.deviceType;
         this.frameSkip  = value.frameSkip !== undefined ? value.frameSkip : FRAME_SKIP;
@@ -261,14 +250,16 @@ export function Initialize() {
     device.setName(controller.name);
     device.addChannel("Strip", caps.leds);
     device.log(`[Tapo] [${controller.deviceName}] type=${controller.deviceType} color=${caps.color} dim=${caps.dim} leds=${caps.leds}`);
-    login();
+
+    // tapo-rest uses a static API key — no login round-trip needed.
+    apiKey = controller.password || null;
+    if (!apiKey) {
+        device.log(`[Tapo] [${controller.deviceName}] No API key set — enter it in the service panel.`);
+    }
 }
 
 export function Render() {
-    if (sessionToken === null) {
-        login();
-        return;
-    }
+    if (!apiKey) return;
 
     frameCounter++;
     if (frameCounter < controller.frameSkip) return;
@@ -302,7 +293,7 @@ export function Render() {
 }
 
 export function Shutdown() {
-    if (!sessionToken) return;
+    if (!apiKey) return;
     const dt   = controller.deviceType.toLowerCase();
     const dn   = controller.deviceName;
     const caps = deviceCaps(dt);
@@ -321,8 +312,8 @@ function httpRequest(method, path, bodyObj, callback) {
     const xhr = new XMLHttpRequest();
     xhr.open(method, `http://${controller.ip}:${controller.port}${path}`, true);
 
-    if (sessionToken) {
-        xhr.setRequestHeader("Authorization", "Bearer " + sessionToken);
+    if (apiKey) {
+        xhr.setRequestHeader("Authorization", "Bearer " + apiKey);
     }
     if (bodyObj) {
         xhr.setRequestHeader("Content-Type", "application/json");
@@ -346,24 +337,7 @@ function httpGet(path, callback) {
     httpRequest("GET", path, null, callback);
 }
 
-// -- Auth & color commands ----------------------------------------------------
-
-function login() {
-    if (requestPending) return;
-    requestPending = true;
-
-    device.log(`[Tapo] [${controller.deviceName}] POST /login ...`);
-    httpPost("/login", { password: controller.password }, (status, body) => {
-        requestPending = false;
-        device.log(`[Tapo] [${controller.deviceName}] /login → HTTP ${status}`);
-        if (status === 200) {
-            sessionToken = body.trim().replace(/^"|"$/g, "");
-            device.log(`[Tapo] [${controller.deviceName}] Session token acquired`);
-        } else {
-            device.log(`[Tapo] [${controller.deviceName}] Login failed — body: ${body}`);
-        }
-    });
-}
+// -- Color commands -----------------------------------------------------------
 
 function sendColor(hue, saturation, bri) {
     const dt   = controller.deviceType.toLowerCase();
@@ -381,29 +355,35 @@ function sendColor(hue, saturation, bri) {
 
     requestPending = true;
 
-    function handle401(status) {
-        if (status === 401) { sessionToken = null; requestPending = false; return true; }
+    // A 401/403 now means the API key is wrong — log it and stop the chain.
+    // (We don't clear the key, otherwise Render would just keep retrying.)
+    function authFailed(status) {
+        if (status === 401 || status === 403) {
+            device.log(`[Tapo] [${dn}] API key rejected (HTTP ${status}) — check the key in the service panel.`);
+            requestPending = false;
+            return true;
+        }
         return false;
     }
 
     // All devices: turn on first
     httpGet(`/actions/${dt}/on?device=${dn}`, (s1) => {
         device.log(`[Tapo] [${dn}] /on → HTTP ${s1}`);
-        if (handle401(s1)) return;
+        if (authFailed(s1)) return;
 
         if (caps.color) {
             // Color devices: set hue/saturation then brightness
             httpGet(`/actions/${dt}/set-hue-saturation?device=${dn}&hue=${hue}&saturation=${saturation}`, (s2) => {
-                if (handle401(s2)) return;
+                if (authFailed(s2)) return;
                 httpGet(`/actions/${dt}/set-brightness?device=${dn}&level=${bri}`, (s3) => {
-                    if (s3 === 401) sessionToken = null;
+                    authFailed(s3);
                     requestPending = false;
                 });
             });
         } else if (caps.dim) {
             // Dimmable only: set brightness
             httpGet(`/actions/${dt}/set-brightness?device=${dn}&level=${bri}`, (s2) => {
-                if (s2 === 401) sessionToken = null;
+                authFailed(s2);
                 requestPending = false;
             });
         } else {
