@@ -2,7 +2,7 @@
 
 A community plugin for [SignalRGB](https://signalrgb.com) that syncs TP-Link Tapo smart lights to your canvas lighting in real time through the local [tapo-rest](https://github.com/ClementNerma/tapo-rest) bridge.
 
-*The Tron version of a lighting desk: devices join the grid, and the README is honest about which hardware has actually been tested.*
+Color frames pass from SignalRGB through a local REST bridge to supported Tapo devices; hardware compatibility is intentionally documented by test status.
 
 ---
 
