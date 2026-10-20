@@ -1,6 +1,8 @@
 # SignalRGB — Tapo Plugin
 
-A community plugin for [SignalRGB](https://signalrgb.com) that syncs TP-Link Tapo smart lights to your canvas lighting in real time.
+A community plugin for [SignalRGB](https://signalrgb.com) that syncs TP-Link Tapo smart lights to your canvas lighting in real time through the local [tapo-rest](https://github.com/ClementNerma/tapo-rest) bridge.
+
+Color frames pass from SignalRGB through a local REST bridge to supported Tapo devices; hardware compatibility is intentionally documented by test status.
 
 ---
 
